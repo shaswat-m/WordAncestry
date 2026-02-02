@@ -59,6 +59,7 @@ LANG_COORDS: Dict[str, Tuple[float, float]] = {
     "Aramaic": (35.2140, 38.9968),              # Syria (Palmyra region)
     "Biblical Hebrew": (31.7683, 35.2137),      # Jerusalem
     "Proto-Basque": (43.0, -1.0),               # Basque Country
+    "Middle Low German": (53.8655, 10.6866),  # Lübeck
 }
 
 LANG_CODE_TO_NAME = {
@@ -75,6 +76,7 @@ LANG_CODE_TO_NAME = {
     "it": "Italian",
     "ca": "Catalan",
     "nl": "Dutch",
+    "gkm": "Middle Low German",
     "inc-hnd": "Hindi (Hindustani)",
     "or": "Odia",
     "pa": "Punjabi",
