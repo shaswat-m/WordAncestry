@@ -44,11 +44,15 @@ LANG_COORDS: Dict[str, Tuple[float, float]] = {
     "Hindi": (28.6139, 77.2090),           # Delhi
     "Japanese": (35.6895, 139.6917),       # Tokyo
     "Chinese": (39.9042, 116.4074),        # Beijing
+    "Medieval Latin": (41.9028, 12.4964),
+    "Early Spanish": (40.4168, -3.7038),
 }
 
 LANG_CODE_TO_NAME = {
     "xno": "Anglo-Norman",
     "nrf": "Norman",
+    "la-med": "Medieval Latin",
+    "es-ear": "Early Spanish",
     "pro": "Old Occitan (Old Provençal)",
     "roa-oit": "Old Italian",
     "ar": "Arabic",
