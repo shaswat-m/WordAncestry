@@ -19,6 +19,8 @@ app = FastAPI(title="WordAncestry")
 # ----------------------------
 # Keep this small at first; expand over time.
 LANG_COORDS: Dict[str, Tuple[float, float]] = {
+    "Anglo-Norman": (49.2, -0.37),  # Normandy-ish
+    "Norman": (49.2, -0.37),
     "English": (51.5074, -0.1278),         # London
     "Middle English": (52.3555, -1.1743),  # England (approx)
     "Old English": (52.5, -1.5),           # England (approx)
@@ -40,6 +42,8 @@ LANG_COORDS: Dict[str, Tuple[float, float]] = {
 }
 
 LANG_CODE_TO_NAME = {
+    "xno": "Anglo-Norman",
+    "nrf": "Norman",
     "enm": "Middle English",
     "ang": "Old English",
     "en": "English",
@@ -73,68 +77,99 @@ def parse_primary_etymology_path_wikitext(word: str, wikitext: str) -> List[Stag
     - grab first Etymology block
     - parse common templates: {{inh|en|la|...}}, {{bor|en|fr|...}}, {{der|en|la|...}}
     - build a path English -> ... -> oldest
+    - ALSO extend the chain using prose patterns like "from Old French X, from Latin Y"
     """
     if not wikitext:
         return [Stage(language="English", word=word)]
 
     # 1) Try to isolate English section
-    # English section begins with "==English=="
     m_en = re.search(r"^==\s*English\s*==\s*$", wikitext, flags=re.MULTILINE)
     if m_en:
         en_start = m_en.end()
-        # next top-level language section
         m_next = re.search(r"^==[^=].*==\s*$", wikitext[en_start:], flags=re.MULTILINE)
         en_text = wikitext[en_start: en_start + (m_next.start() if m_next else len(wikitext))]
     else:
         en_text = wikitext
 
     # 2) Extract first Etymology subsection
-    # Etymology headings are like "===Etymology===" or "===Etymology 1==="
     m_et = re.search(r"^===\s*Etymology(?:\s*\d+)?\s*===\s*$", en_text, flags=re.MULTILINE)
     if m_et:
         et_start = m_et.end()
         m_next_h3 = re.search(r"^===.*===\s*$", en_text[et_start:], flags=re.MULTILINE)
         et_text = en_text[et_start: et_start + (m_next_h3.start() if m_next_h3 else len(en_text))]
     else:
-        # Some pages just have etymology prose without heading
         et_text = en_text
 
     # 3) Parse template hops
-    # Common: {{inh|en|la|word}}, {{bor|en|fr|word}}, {{der|en|la|word}}
-    # We'll read "to-language" and "from-language" and the from-word argument if present.
     hop_pat = re.compile(r"\{\{\s*(inh|bor|der|lbor)\s*\|([^}]+)\}\}", flags=re.IGNORECASE)
-    stages: List[Stage] = [Stage(language="English", word=word)]
-
-    # Keep the latest "current language" as we walk back
-    current_lang = "en"
-
+    hops = []
     for kind, args in hop_pat.findall(et_text):
         parts = [p.strip() for p in args.split("|") if p.strip()]
-        # Expect parts like: [to, from, term? ...]
         if len(parts) < 2:
             continue
         to_lang = parts[0]
         from_lang = parts[1]
         term = parts[2] if len(parts) >= 3 else None
+        hops.append((to_lang, from_lang, term))
 
-        # Only follow chains where the "to" matches our current stage language
-        if to_lang != current_lang:
-            continue
+    # Also capture patterns like: {{etyl|fro|enm}} ... {{m|fro|salaire}}
+    etyl_pat = re.compile(r"\{\{\s*etyl\s*\|([^|}]+)\|([^|}]+)\s*\}\}", re.IGNORECASE)
+    m_pat = re.compile(r"\{\{\s*m\s*\|([^|}]+)\|([^|}]+)", re.IGNORECASE)
 
+    etyls = etyl_pat.findall(et_text)
+    ms = m_pat.findall(et_text)
+
+    for from_lang, to_lang in etyls:
+        for m_lang, m_word in ms:
+            if m_lang == from_lang:
+                hops.append((to_lang, from_lang, m_word))
+
+    stages: List[Stage] = [Stage(language="English", word=word)]
+
+    # Follow chain: find a hop whose to_lang matches current_lang, then step back
+    current_lang = "en"
+    seen = set([current_lang])
+    while True:
+        match = next((h for h in hops if h[0] == current_lang), None)
+        if not match:
+            break
+
+        _, from_lang, term = match
         from_lang_name = _lang_name(from_lang)
         from_word = term or f"(unknown {from_lang_name} form)"
         stages.append(Stage(language=from_lang_name, word=from_word))
-        current_lang = from_lang
 
-    # If we failed to find any hops, try a fallback heuristic on the etymology prose:
-    if len(stages) == 1:
-        # Look for e.g. "From Old French X" "from Latin Y"
-        known_langs = sorted(LANG_COORDS.keys(), key=len, reverse=True)
-        lang_regex = "|".join(re.escape(l) for l in known_langs)
-        pattern = re.compile(rf"\b(?:from|From)\s+({lang_regex})\b\s+([A-Za-zÀ-ÖØ-öø-ÿ'’\-]+)", re.UNICODE)
-        matches = pattern.findall(et_text)
-        for lang, w2 in matches:
-            stages.append(Stage(language=lang, word=w2))
+        current_lang = from_lang
+        if current_lang in seen:
+            break
+        seen.add(current_lang)
+
+    # --- NEW: Always attempt to extend chain using prose ("from <Language> <term>") ---
+    # This is the key fix for cases where templates only encode the first hop.
+    plain = _wikitext_to_plain(et_text)
+
+    # Build language regex from known language names (keys of LANG_COORDS) + some common extras
+    extra_langs = [
+        "Anglo-Norman", "Norman", "Old Norman",
+        "Old French", "Middle French", "French",
+        "Late Latin", "Latin",
+        "Ancient Greek", "Greek",
+        "Proto-Indo-European",
+        "Middle English", "Old English",
+    ]
+    all_langs = sorted(set(list(LANG_COORDS.keys()) + extra_langs), key=len, reverse=True)
+    lang_regex = "|".join(re.escape(l) for l in all_langs)
+
+    prose_pat = re.compile(
+        rf"\bfrom\s+({lang_regex})\b\s+([A-Za-zÀ-ÖØ-öø-ÿ'’\-]+)",
+        flags=re.IGNORECASE | re.UNICODE,
+    )
+    found = prose_pat.findall(plain)
+
+    for lang, w2 in found:
+        # normalize case to existing language keys
+        lang_norm = next((L for L in all_langs if L.lower() == lang.lower()), lang)
+        stages.append(Stage(language=lang_norm, word=w2))
 
     # Deduplicate consecutive
     out: List[Stage] = []
@@ -169,6 +204,27 @@ def _make_node_id(query_word: str, language: str, stage_word: str) -> str:
 
 def _lang_coord(lang: str) -> Tuple[float, float]:
     return LANG_COORDS.get(lang, DEFAULT_COORD)
+
+def _wikitext_to_plain(s: str) -> str:
+    """
+    Very lightweight wikitext cleanup:
+    - replace [[A|B]] -> B and [[A]] -> A
+    - strip italics/bold quotes ''
+    - strip templates {{...}} (replace with space)
+    """
+    # [[A|B]] -> B, [[A]] -> A
+    s = re.sub(r"\[\[([^|\]]+)\|([^\]]+)\]\]", r"\2", s)
+    s = re.sub(r"\[\[([^\]]+)\]\]", r"\1", s)
+
+    # remove templates entirely
+    s = re.sub(r"\{\{[^{}]*\}\}", " ", s)
+
+    # strip wiki italics/bold markers
+    s = s.replace("''", "")
+
+    # collapse whitespace
+    s = " ".join(s.split())
+    return s
 
 
 def fetch_wiktionary_html(word: str) -> str:
