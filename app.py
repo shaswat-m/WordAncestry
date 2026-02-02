@@ -392,7 +392,7 @@ def build_graph(query_word: str, stages: List[Stage]) -> Dict[str, Any]:
 
 @app.get("/api/etymology")
 def api_etymology(word: str = Query(..., min_length=1, max_length=80)) -> JSONResponse:
-    w = word.strip()
+    w = word.lower().strip()
     #html = fetch_wiktionary_html(w)
     #stages = parse_primary_etymology_path(w, html)
     wt = fetch_wiktionary_wikitext(w)
