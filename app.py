@@ -64,7 +64,7 @@ def _lang_name(code_or_name: str) -> str:
     c = code_or_name.strip()
     return LANG_CODE_TO_NAME.get(c, c)
 
-def parse_primary_etymology_pathi_wikitext(word: str, wikitext: str) -> List[Stage]:
+def parse_primary_etymology_path_wikitext(word: str, wikitext: str) -> List[Stage]:
     """
     Robust-ish v1.1:
     - restrict to English section if present
