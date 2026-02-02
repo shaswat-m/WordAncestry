@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
 import json
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
@@ -435,6 +436,7 @@ app.mount("/static", StaticFiles(directory="static", html=True), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
-    with open("static/index.html", "r", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+    here = Path(__file__).resolve().parent
+    html_path = here / "static" / "index.html"
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
