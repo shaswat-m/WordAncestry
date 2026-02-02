@@ -40,6 +40,8 @@ LANG_COORDS: Dict[str, Tuple[float, float]] = {
 }
 
 LANG_CODE_TO_NAME = {
+    "enm": "Middle English",
+    "ang": "Old English",
     "en": "English",
     "fr": "French",
     "fro": "Old French",
