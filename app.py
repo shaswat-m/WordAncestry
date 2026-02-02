@@ -4,6 +4,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+import json
 
 import requests
 from bs4 import BeautifulSoup
@@ -38,6 +39,110 @@ LANG_COORDS: Dict[str, Tuple[float, float]] = {
     "Chinese": (39.9042, 116.4074),        # Beijing
 }
 
+LANG_CODE_TO_NAME = {
+    "en": "English",
+    "fr": "French",
+    "fro": "Old French",
+    "frm": "Middle French",
+    "la": "Latin",
+    "LL.": "Late Latin",
+    "grc": "Ancient Greek",
+    "el": "Greek",
+    "de": "German",
+    "gmh": "Middle High German",
+    "goh": "Old High German",
+    "gem-pro": "Proto-Germanic",
+    "ine-pro": "Proto-Indo-European",
+    "sa": "Sanskrit",
+    "hi": "Hindi",
+    "ja": "Japanese",
+    "zh": "Chinese",
+}
+
+def _lang_name(code_or_name: str) -> str:
+    # Wiktionary templates often use language codes; sometimes names appear directly.
+    c = code_or_name.strip()
+    return LANG_CODE_TO_NAME.get(c, c)
+
+def parse_primary_etymology_pathi_wikitext(word: str, wikitext: str) -> List[Stage]:
+    """
+    Robust-ish v1.1:
+    - restrict to English section if present
+    - grab first Etymology block
+    - parse common templates: {{inh|en|la|...}}, {{bor|en|fr|...}}, {{der|en|la|...}}
+    - build a path English -> ... -> oldest
+    """
+    if not wikitext:
+        return [Stage(language="English", word=word)]
+
+    # 1) Try to isolate English section
+    # English section begins with "==English=="
+    m_en = re.search(r"^==\s*English\s*==\s*$", wikitext, flags=re.MULTILINE)
+    if m_en:
+        en_start = m_en.end()
+        # next top-level language section
+        m_next = re.search(r"^==[^=].*==\s*$", wikitext[en_start:], flags=re.MULTILINE)
+        en_text = wikitext[en_start: en_start + (m_next.start() if m_next else len(wikitext))]
+    else:
+        en_text = wikitext
+
+    # 2) Extract first Etymology subsection
+    # Etymology headings are like "===Etymology===" or "===Etymology 1==="
+    m_et = re.search(r"^===\s*Etymology(?:\s*\d+)?\s*===\s*$", en_text, flags=re.MULTILINE)
+    if m_et:
+        et_start = m_et.end()
+        m_next_h3 = re.search(r"^===.*===\s*$", en_text[et_start:], flags=re.MULTILINE)
+        et_text = en_text[et_start: et_start + (m_next_h3.start() if m_next_h3 else len(en_text))]
+    else:
+        # Some pages just have etymology prose without heading
+        et_text = en_text
+
+    # 3) Parse template hops
+    # Common: {{inh|en|la|word}}, {{bor|en|fr|word}}, {{der|en|la|word}}
+    # We'll read "to-language" and "from-language" and the from-word argument if present.
+    hop_pat = re.compile(r"\{\{\s*(inh|bor|der|lbor)\s*\|([^}]+)\}\}", flags=re.IGNORECASE)
+    stages: List[Stage] = [Stage(language="English", word=word)]
+
+    # Keep the latest "current language" as we walk back
+    current_lang = "en"
+
+    for kind, args in hop_pat.findall(et_text):
+        parts = [p.strip() for p in args.split("|") if p.strip()]
+        # Expect parts like: [to, from, term? ...]
+        if len(parts) < 2:
+            continue
+        to_lang = parts[0]
+        from_lang = parts[1]
+        term = parts[2] if len(parts) >= 3 else None
+
+        # Only follow chains where the "to" matches our current stage language
+        if to_lang != current_lang:
+            continue
+
+        from_lang_name = _lang_name(from_lang)
+        from_word = term or f"(unknown {from_lang_name} form)"
+        stages.append(Stage(language=from_lang_name, word=from_word))
+        current_lang = from_lang
+
+    # If we failed to find any hops, try a fallback heuristic on the etymology prose:
+    if len(stages) == 1:
+        # Look for e.g. "From Old French X" "from Latin Y"
+        known_langs = sorted(LANG_COORDS.keys(), key=len, reverse=True)
+        lang_regex = "|".join(re.escape(l) for l in known_langs)
+        pattern = re.compile(rf"\b(?:from|From)\s+({lang_regex})\b\s+([A-Za-zÀ-ÖØ-öø-ÿ'’\-]+)", re.UNICODE)
+        matches = pattern.findall(et_text)
+        for lang, w2 in matches:
+            stages.append(Stage(language=lang, word=w2))
+
+    # Deduplicate consecutive
+    out: List[Stage] = []
+    for s in stages:
+        if not out or (out[-1].language != s.language or out[-1].word != s.word):
+            out.append(s)
+
+    return out
+
+
 # If a language isn't in the dict, we can fall back to (0,0) or skip plotting.
 DEFAULT_COORD = (0.0, 0.0)
 
@@ -69,6 +174,31 @@ def fetch_wiktionary_html(word: str) -> str:
     r = requests.get(url, timeout=20, headers={"User-Agent": "WordAncestry/0.1"})
     r.raise_for_status()
     return r.text
+
+def fetch_wiktionary_wikitext(word: str) -> str:
+    """
+    Fetches page wikitext via MediaWiki API (more reliable than scraping HTML).
+    """
+    api = "https://en.wiktionary.org/w/api.php"
+    params = {
+        "action": "query",
+        "format": "json",
+        "prop": "revisions",
+        "rvprop": "content",
+        "rvslots": "main",
+        "titles": word,
+        "redirects": 1,
+    }
+    r = requests.get(api, params=params, timeout=20, headers={"User-Agent": "WordAncestry/0.1"})
+    r.raise_for_status()
+    data = r.json()
+
+    pages = data.get("query", {}).get("pages", {})
+    page = next(iter(pages.values()), {})
+    revs = page.get("revisions", [])
+    if not revs:
+        return ""
+    return revs[0].get("slots", {}).get("main", {}).get("*", "") or ""
 
 
 def parse_primary_etymology_path(word: str, html: str) -> List[Stage]:
@@ -174,14 +304,17 @@ def build_graph(query_word: str, stages: List[Stage]) -> Dict[str, Any]:
         "nodes": nodes,
         "edges": edges,
         "primary_path": primary_path,
+        "debug": {"n_stages": len(stages)}
     }
 
 
 @app.get("/api/etymology")
 def api_etymology(word: str = Query(..., min_length=1, max_length=80)) -> JSONResponse:
     w = word.strip()
-    html = fetch_wiktionary_html(w)
-    stages = parse_primary_etymology_path(w, html)
+    #html = fetch_wiktionary_html(w)
+    #stages = parse_primary_etymology_path(w, html)
+    wt = fetch_wiktionary_wikitext(w)
+    stages = parse_primary_etymology_path_wikitext(w, wt)
     graph = build_graph(w, stages)
     return JSONResponse(graph)
 
