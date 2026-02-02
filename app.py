@@ -47,6 +47,18 @@ LANG_COORDS: Dict[str, Tuple[float, float]] = {
     "Medieval Latin": (41.9028, 12.4964),
     "Early Spanish": (40.4168, -3.7038),
     "Late Latin": (41.9028, 12.4964),
+    "Proto-West Germanic": (51.0, 10.0),       # Central Germany
+    "Vulgar Latin": (41.9028, 12.4964),        # Rome
+    "New Latin": (41.9028, 12.4964),            # Rome
+    "Italian": (43.7696, 11.2558),              # Florence
+    "Catalan": (41.3851, 2.1734),               # Barcelona
+    "Dutch": (52.3676, 4.9041),                 # Amsterdam
+    "Hindi (Hindustani)": (28.6139, 77.2090),   # Delhi
+    "Odia": (20.2961, 85.8245),                 # Bhubaneswar
+    "Punjabi": (31.5204, 74.3587),              # Lahore
+    "Aramaic": (35.2140, 38.9968),              # Syria (Palmyra region)
+    "Biblical Hebrew": (31.7683, 35.2137),      # Jerusalem
+    "Proto-Basque": (43.0, -1.0),               # Basque Country
 }
 
 LANG_CODE_TO_NAME = {
@@ -57,6 +69,18 @@ LANG_CODE_TO_NAME = {
     "es-ear": "Early Spanish",
     "pro": "Old Occitan (Old Provençal)",
     "roa-oit": "Old Italian",
+    "gmw-pro": "Proto-West Germanic",
+    "la-vul": "Vulgar Latin",
+    "la-new": "New Latin",
+    "it": "Italian",
+    "ca": "Catalan",
+    "nl": "Dutch",
+    "inc-hnd": "Hindi (Hindustani)",
+    "or": "Odia",
+    "pa": "Punjabi",
+    "arc": "Aramaic",
+    "hbo": "Biblical Hebrew",
+    "esx-esk-pro": "Proto-Basque",
     "ar": "Arabic",
     "fa-cls": "Classical Persian",
     "dra": "Dravidian (Proto-/family)",
