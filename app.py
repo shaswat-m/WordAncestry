@@ -20,7 +20,12 @@ app = FastAPI(title="WordAncestry")
 # Keep this small at first; expand over time.
 LANG_COORDS: Dict[str, Tuple[float, float]] = {
     "Anglo-Norman": (49.2, -0.37),  # Normandy-ish
-    "Norman": (49.2, -0.37),
+    "Norman": (49.2, -0.37),    # Old Occitan / Provence-ish (Avignon)
+    "Old Occitan (Old Provençal)": (43.9493, 4.8055),    # Old Italian (Florence as a reasonable representative)
+    "Old Italian": (43.7696, 11.2558),    # Arabic (choose a representative; Baghdad is a decent classical hub)
+    "Arabic": (33.3152, 44.3661),   # Classical Persian (Shiraz as a reasonable Persian cultural hub)
+    "Classical Persian": (29.5918, 52.5837),  # Dravidian family (South India centroid-ish: Bengaluru)
+    "Dravidian (Proto-/family)": (12.9716, 77.5946),
     "English": (51.5074, -0.1278),         # London
     "Middle English": (52.3555, -1.1743),  # England (approx)
     "Old English": (52.5, -1.5),           # England (approx)
@@ -44,6 +49,11 @@ LANG_COORDS: Dict[str, Tuple[float, float]] = {
 LANG_CODE_TO_NAME = {
     "xno": "Anglo-Norman",
     "nrf": "Norman",
+    "pro": "Old Occitan (Old Provençal)",
+    "roa-oit": "Old Italian",
+    "ar": "Arabic",
+    "fa-cls": "Classical Persian",
+    "dra": "Dravidian (Proto-/family)",
     "enm": "Middle English",
     "ang": "Old English",
     "en": "English",
