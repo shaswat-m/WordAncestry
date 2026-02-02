@@ -69,20 +69,19 @@ def _lang_name(code_or_name: str) -> str:
     # Wiktionary templates often use language codes; sometimes names appear directly.
     c = code_or_name.strip()
     return LANG_CODE_TO_NAME.get(c, c)
-
 def parse_primary_etymology_path_wikitext(word: str, wikitext: str) -> List[Stage]:
     """
-    Robust-ish v1.1:
-    - restrict to English section if present
-    - grab first Etymology block
-    - parse common templates: {{inh|en|la|...}}, {{bor|en|fr|...}}, {{der|en|la|...}}
-    - build a path English -> ... -> oldest
-    - ALSO extend the chain using prose patterns like "from Old French X, from Latin Y"
+    Parse the first English Etymology block and extract an ordered list of source steps.
+
+    Key behavior:
+    - Wiktionary often encodes etymology as "From {{inh|en|enm|...}}, from {{der|en|xno|...}}, ..."
+      i.e. all templates have to_lang=en, not a to_lang chain.
+    - Therefore we read templates IN ORDER and append each (from_lang, term) as the next stage.
     """
     if not wikitext:
         return [Stage(language="English", word=word)]
 
-    # 1) Try to isolate English section
+    # 1) Isolate English section if present
     m_en = re.search(r"^==\s*English\s*==\s*$", wikitext, flags=re.MULTILINE)
     if m_en:
         en_start = m_en.end()
@@ -91,7 +90,7 @@ def parse_primary_etymology_path_wikitext(word: str, wikitext: str) -> List[Stag
     else:
         en_text = wikitext
 
-    # 2) Extract first Etymology subsection
+    # 2) Extract first Etymology subsection if present
     m_et = re.search(r"^===\s*Etymology(?:\s*\d+)?\s*===\s*$", en_text, flags=re.MULTILINE)
     if m_et:
         et_start = m_et.end()
@@ -100,19 +99,45 @@ def parse_primary_etymology_path_wikitext(word: str, wikitext: str) -> List[Stag
     else:
         et_text = en_text
 
-    # 3) Parse template hops
-    hop_pat = re.compile(r"\{\{\s*(inh|bor|der|lbor)\s*\|([^}]+)\}\}", flags=re.IGNORECASE)
-    hops = []
-    for kind, args in hop_pat.findall(et_text):
-        parts = [p.strip() for p in args.split("|") if p.strip()]
+    # Start with the queried word as English
+    stages: List[Stage] = [Stage(language="English", word=word)]
+
+    # 3) Ordered scan of common etymology templates in the etymology text
+    # We preserve appearance order using finditer.
+    tpl_pat = re.compile(r"\{\{\s*(inh|bor|der|lbor)\s*\|([^}]*)\}\}", flags=re.IGNORECASE)
+
+    for m in tpl_pat.finditer(et_text):
+        kind = m.group(1).lower()
+        args = m.group(2)
+
+        parts = [p.strip() for p in args.split("|")]
+        # Typical formats:
+        #   inh|en|enm|salarie
+        #   der|en|la|salārium||wages
+        # We want:
+        #   from_lang = parts[1] (index 2 overall after split)?? Actually parts include to at [0]
+        # parts[0]=to_lang, parts[1]=from_lang, parts[2]=term (often)
         if len(parts) < 2:
             continue
-        to_lang = parts[0]
-        from_lang = parts[1]
-        term = parts[2] if len(parts) >= 3 else None
-        hops.append((to_lang, from_lang, term))
 
-    # Also capture patterns like: {{etyl|fro|enm}} ... {{m|fro|salaire}}
+        to_lang = parts[0] if len(parts) >= 1 else None
+        from_lang = parts[1] if len(parts) >= 2 else None
+        term = parts[2] if len(parts) >= 3 and parts[2] else None
+
+        # Only follow when the template is describing the English word (to_lang == en),
+        # otherwise ignore to reduce noise.
+        if to_lang != "en":
+            continue
+
+        if not from_lang:
+            continue
+
+        from_lang_name = _lang_name(from_lang)
+        from_word = term or f"(unknown {from_lang_name} form)"
+        stages.append(Stage(language=from_lang_name, word=from_word))
+
+    # Optional: also support the {{etyl|fro|enm}} + {{m|fro|word}} pattern
+    # (kept from your previous version; appended if present)
     etyl_pat = re.compile(r"\{\{\s*etyl\s*\|([^|}]+)\|([^|}]+)\s*\}\}", re.IGNORECASE)
     m_pat = re.compile(r"\{\{\s*m\s*\|([^|}]+)\|([^|}]+)", re.IGNORECASE)
 
@@ -120,56 +145,11 @@ def parse_primary_etymology_path_wikitext(word: str, wikitext: str) -> List[Stag
     ms = m_pat.findall(et_text)
 
     for from_lang, to_lang in etyls:
+        if to_lang != "en":
+            continue
         for m_lang, m_word in ms:
-            if m_lang == from_lang:
-                hops.append((to_lang, from_lang, m_word))
-
-    stages: List[Stage] = [Stage(language="English", word=word)]
-
-    # Follow chain: find a hop whose to_lang matches current_lang, then step back
-    current_lang = "en"
-    seen = set([current_lang])
-    while True:
-        match = next((h for h in hops if h[0] == current_lang), None)
-        if not match:
-            break
-
-        _, from_lang, term = match
-        from_lang_name = _lang_name(from_lang)
-        from_word = term or f"(unknown {from_lang_name} form)"
-        stages.append(Stage(language=from_lang_name, word=from_word))
-
-        current_lang = from_lang
-        if current_lang in seen:
-            break
-        seen.add(current_lang)
-
-    # --- NEW: Always attempt to extend chain using prose ("from <Language> <term>") ---
-    # This is the key fix for cases where templates only encode the first hop.
-    plain = _wikitext_to_plain(et_text)
-
-    # Build language regex from known language names (keys of LANG_COORDS) + some common extras
-    extra_langs = [
-        "Anglo-Norman", "Norman", "Old Norman",
-        "Old French", "Middle French", "French",
-        "Late Latin", "Latin",
-        "Ancient Greek", "Greek",
-        "Proto-Indo-European",
-        "Middle English", "Old English",
-    ]
-    all_langs = sorted(set(list(LANG_COORDS.keys()) + extra_langs), key=len, reverse=True)
-    lang_regex = "|".join(re.escape(l) for l in all_langs)
-
-    prose_pat = re.compile(
-        rf"\bfrom\s+({lang_regex})\b\s+([A-Za-zÀ-ÖØ-öø-ÿ'’\-]+)",
-        flags=re.IGNORECASE | re.UNICODE,
-    )
-    found = prose_pat.findall(plain)
-
-    for lang, w2 in found:
-        # normalize case to existing language keys
-        lang_norm = next((L for L in all_langs if L.lower() == lang.lower()), lang)
-        stages.append(Stage(language=lang_norm, word=w2))
+            if m_lang == from_lang and m_word:
+                stages.append(Stage(language=_lang_name(from_lang), word=m_word))
 
     # Deduplicate consecutive
     out: List[Stage] = []
@@ -178,6 +158,7 @@ def parse_primary_etymology_path_wikitext(word: str, wikitext: str) -> List[Stag
             out.append(s)
 
     return out
+
 
 
 # If a language isn't in the dict, we can fall back to (0,0) or skip plotting.
@@ -376,6 +357,35 @@ def api_etymology(word: str = Query(..., min_length=1, max_length=80)) -> JSONRe
     graph = build_graph(w, stages)
     return JSONResponse(graph)
 
+@app.get("/api/debug_etymology_text")
+def debug_etymology_text(word: str) -> JSONResponse:
+    w = word.strip()
+    wt = fetch_wiktionary_wikitext(w)
+    if not wt:
+        return JSONResponse({"error": "no wikitext"})
+
+    # isolate English section
+    m_en = re.search(r"^==\s*English\s*==\s*$", wt, flags=re.MULTILINE)
+    if m_en:
+        en_start = m_en.end()
+        m_next = re.search(r"^==[^=].*==\s*$", wt[en_start:], flags=re.MULTILINE)
+        en_text = wt[en_start: en_start + (m_next.start() if m_next else len(wt))]
+    else:
+        en_text = wt
+
+    # isolate first Etymology block
+    m_et = re.search(r"^===\s*Etymology(?:\s*\d+)?\s*===\s*$", en_text, flags=re.MULTILINE)
+    if m_et:
+        et_start = m_et.end()
+        m_next_h3 = re.search(r"^===.*===\s*$", en_text[et_start:], flags=re.MULTILINE)
+        et_text = en_text[et_start: et_start + (m_next_h3.start() if m_next_h3 else len(en_text))]
+    else:
+        et_text = en_text
+
+    return JSONResponse({
+        "raw_etymology_wikitext": et_text[:4000],
+        "plain_etymology_text": _wikitext_to_plain(et_text)[:4000],
+    })
 
 # Serve a simple frontend
 app.mount("/static", StaticFiles(directory="static", html=True), name="static")
